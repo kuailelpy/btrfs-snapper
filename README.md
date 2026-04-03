@@ -1,5 +1,7 @@
 # Btrfs Snapper
 
+> 本项目代码由 OpenClaw AI 工具生成
+
 Btrfs 文件系统快照管理工具，提供 Web UI 界面进行可视化操作。
 
 ## 功能特性
