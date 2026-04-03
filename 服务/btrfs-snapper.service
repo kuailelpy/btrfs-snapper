@@ -1,0 +1,14 @@
+[Unit]
+Description=Btrfs Snapper WebUI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/DATA/AppData/Btrfs-snapper
+ExecStart=/usr/bin/python3 /DATA/AppData/Btrfs-snapper/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

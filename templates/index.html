@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Btrfs Snapper</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #ddd; border: none; cursor: pointer; }
+        .tab.active { background: #007bff; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group select, .form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; white-space: nowrap; }
+        td:nth-child(5), td:nth-child(6) { white-space: nowrap; }
+        th { background: #f5f5f5; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
+        .modal.show { display: block; }
+        .modal-content { background: white; max-width: 500px; margin: 100px auto; padding: 20px; border-radius: 8px; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .close { background: none; border: none; font-size: 24px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Btrfs 快照管理</h1>
+        <div class="tabs">
+            <button class="tab active" data-tab="partitions">分区管理</button>
+            <button class="tab" data-tab="schedule">定时任务</button>
+            <button class="tab" data-tab="records">执行记录</button>
+            <button class="tab" data-tab="settings">设置</button>
+        </div>
+        
+        <div id="partitions" class="tab-content active">
+            <div class="card">
+                <h2>Btrfs分区</h2>
+                <div class="form-group">
+                    <label>选择分区:</label>
+                    <select id="partitionSelect" onchange="onPartitionChange()">
+                        {% for p in partitions %}
+                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}" {% if default_partition and p.device == default_partition.device %}selected{% endif %}>{{ p.label }} ({{ p.device }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>选择子卷:</label>
+                    <select id="subvolSelect">
+                        <option value="">根分区(无子卷)</option>
+                        {% for sv in default_subvolumes %}
+                        <option value="{{ sv.path }}">{{ sv.path }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>快照保存目录:</label>
+                    <select id="folderSelect">
+                        {% for folder in default_folders %}
+                        <option value="{{ folder }}">{{ folder }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="manualReadonly" checked> 只读
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="refreshSnapshots()">刷新</button>
+            </div>
+            
+            <div class="card">
+                <h2>快照列表</h2>
+                <div class="form-group">
+                    <button class="btn btn-success" onclick="showCreateModal()">创建快照</button>
+                </div>
+                <table id="snapshotTable">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>路径</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if default_snapshots %}
+                        {% for sv in default_snapshots %}
+                        <tr>
+                            <td>{{ sv.id }}</td>
+                            <td>{{ sv.path }}</td>
+                            <td class="actions">
+                                <button class="btn btn-danger btn-sm" onclick="deleteSnapshot('{{ sv.path }}')">删除</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr><td colspan="3">该分区没有快照</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="schedule" class="tab-content">
+            <div class="card">
+                <h2>创建定时任务</h2>
+                <div class="form-group">
+                    <label>任务名称:</label>
+                    <input type="text" id="taskName" placeholder="例如: daily_backup">
+                </div>
+                <div class="form-group">
+                    <label>选择分区:</label>
+                    <select id="schedulePartition" onchange="onSchedulePartitionChange()">
+                        {% for p in partitions %}
+                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}">{{ p.label }} ({{ p.device }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>选择子卷:</label>
+                    <select id="scheduleSubvol">
+                        <option value="">根分区(无子卷)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>快照保存目录:</label>
+                    <select id="scheduleFolder"></select>
+                </div>
+                <div class="form-group">
+                    <label>执行频率:</label>
+                    <select id="scheduleType" onchange="updateScheduleOptions()">
+                        <option value="daily">每天</option>
+                        <option value="weekly">每周</option>
+                        <option value="monthly">每月</option>
+                    </select>
+                </div>
+                <div id="weeklyOptions" style="display:none" class="form-group">
+                    <label>星期:</label>
+                    <select id="dayOfWeek">
+                        <option value="0">周日</option>
+                        <option value="1">周一</option>
+                        <option value="2">周二</option>
+                        <option value="3">周三</option>
+                        <option value="4">周四</option>
+                        <option value="5">周五</option>
+                        <option value="6">周六</option>
+                    </select>
+                </div>
+                <div id="monthlyOptions" style="display:none" class="form-group">
+                    <label>日期:</label>
+                    <input type="number" id="dayOfMonth" min="1" max="31" value="1">
+                </div>
+                <div class="form-group">
+                    <label>时间 (时:分:秒):</label>
+                    <div style="display: flex; align-items: center; gap: 8px; max-width: 300px;">
+                        <input type="number" id="hour" min="0" max="23" value="0" style="flex: 1;"> :
+                        <input type="number" id="minute" min="0" max="59" value="0" style="flex: 1;"> :
+                        <input type="number" id="second" min="0" max="59" value="0" style="flex: 1;">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="readonly" checked> 只读快照
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>最大保留数量:</label>
+                    <input type="number" id="maxKeep" min="0" value="7" placeholder="0表示不限制">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="updateLatest" checked> 更新 latest 符号链接
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="createSchedule()">创建任务</button>
+            </div>
+            
+            <div class="card">
+                <h2>定时任务列表</h2>
+                <table id="scheduleTable">
+                    <thead>
+                        <tr>
+                            <th>任务名</th>
+                            <th>分区</th>
+                            <th>频率</th>
+                            <th>时间</th>
+                            <th>只读</th>
+                            <th>保留数</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="8">暂无定时任务</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="records" class="tab-content">
+            <div class="card">
+                <h2>执行记录</h2>
+                <div class="form-group">
+                    <label>记录类型:</label>
+                    <select id="recordType" onchange="loadRecords()">
+                        <option value="all">全部</option>
+                        <option value="manual">手动</option>
+                        <option value="auto">自动</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>时间范围:</label>
+                    <select id="dateRange" onchange="handleDateRangeChange()">
+                        <option value="all">全部</option>
+                        <option value="today">今天</option>
+                        <option value="week">最近一周</option>
+                        <option value="month">最近一月</option>
+                        <option value="year">最近一年</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                    <input type="date" id="customDate" style="display:none" onchange="loadRecords()">
+                </div>
+                <button class="btn btn-secondary" onclick="loadRecords()">刷新</button>
+                <table id="recordsTable">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>类型</th>
+                            <th>分区</th>
+                            <th>快照名</th>
+                            <th>操作</th>
+                            <th>结果</th>
+                            <th>信息</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="7">暂无记录</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="settings" class="tab-content">
+            <div class="card">
+                <h2>设置</h2>
+                <div class="form-group">
+                    <label>记录存储上限 (MB):</label>
+                    <input type="number" id="maxStorageMb" value="{{ config.get('max_storage_mb', 100) }}">
+                </div>
+                <button class="btn btn-primary" onclick="saveSettings()">保存</button>
+            </div>
+            <div class="card">
+                <h2>关于</h2>
+                <p>Btrfs 快照管理工具 v1.0</p>
+            </div>
+        </div>
+    </div>
+    
+    <div id="createModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>创建快照</h3>
+                <button class="close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>快照名称:</label>
+                <input type="text" id="snapshotName" placeholder="例如: snapshot_20240101">
+            </div>
+            <button class="btn btn-primary" onclick="createSubvolume()">创建</button>
+        </div>
+    </div>
+
+<script>
+let currentPartition = '';
+let currentMountPoint = '';
+
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+        if (tab.dataset.tab === 'partitions') refreshSnapshots();
+        if (tab.dataset.tab === 'schedule') loadSchedules();
+        if (tab.dataset.tab === 'records') loadRecords();
+    });
+});
+
+document.getElementById('partitionSelect').addEventListener('change', function() {
+    const option = this.options[this.selectedIndex];
+    currentPartition = this.value;
+    currentMountPoint = option.dataset.mount || '';
+    refreshSnapshots();
+});
+
+function initPage() {
+    const select = document.getElementById('partitionSelect');
+    if (select.options.length > 0) {
+        const option = select.options[0];
+        currentPartition = option.value;
+        currentMountPoint = option.dataset.mount || '';
+        loadSubvolumesAndFolders().then(() => {
+            const subvolSelect = document.getElementById('subvolSelect');
+            if (subvolSelect.options.length > 1) {
+                subvolSelect.selectedIndex = 1;
+            }
+            const folderSelect = document.getElementById('folderSelect');
+            if (folderSelect.options.length > 0) {
+                folderSelect.selectedIndex = 0;
+            }
+        });
+    }
+}
+
+function onPartitionChange() {
+    const select = document.getElementById('partitionSelect');
+    const option = select.options[select.selectedIndex];
+    currentPartition = select.value;
+    currentMountPoint = option.dataset.mount || '';
+    loadSubvolumesAndFolders();
+    refreshSnapshots();
+}
+
+function loadSubvolumesAndFolders() {
+    if (!currentMountPoint) return Promise.resolve();
+    
+    return fetch('/api/subvolumes?mount_point=' + encodeURIComponent(currentMountPoint))
+        .then(r => r.json())
+        .then(data => {
+            const subvolSelect = document.getElementById('subvolSelect');
+            subvolSelect.innerHTML = '<option value="">根分区(无子卷)</option>';
+            data.forEach(sv => {
+                subvolSelect.innerHTML += '<option value="' + sv.path + '">' + sv.path + '</option>';
+            });
+            if (data.length > 0) {
+                subvolSelect.selectedIndex = 1;
+            }
+        })
+        .then(() => {
+            return fetch('/api/folders?mount_point=' + encodeURIComponent(currentMountPoint) + '&filter_snapshots=include_only');
+        })
+        .then(r => r.json())
+        .then(data => {
+            const folderSelect = document.getElementById('folderSelect');
+            folderSelect.innerHTML = '';
+            data.forEach(folder => {
+                folderSelect.innerHTML += '<option value="' + folder + '">' + folder + '</option>';
+            });
+            if (data.length > 0) {
+                folderSelect.selectedIndex = 0;
+            }
+        });
+}
+
+function refreshSnapshots() {
+    const select = document.getElementById('partitionSelect');
+    const option = select.options[select.selectedIndex];
+    currentPartition = select.value;
+    currentMountPoint = option.dataset.mount || '';
+    
+    const tbody = document.querySelector('#snapshotTable tbody');
+    if (!currentMountPoint) {
+        tbody.innerHTML = '<tr><td colspan="3">请先选择分区</td></tr>';
+        return;
+    }
+    
+    fetch('/api/snapshots?mount_point=' + encodeURIComponent(currentMountPoint))
+        .then(r => r.json())
+        .then(data => {
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">该分区没有快照</td></tr>';
+                return;
+            }
+            const snapshotPattern = /[-_][0-9]{8}(_[0-9]{6})?$/;
+            const filteredData = data.filter(sv => snapshotPattern.test(sv.path));
+            if (filteredData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">该分区没有快照</td></tr>';
+                return;
+            }
+            tbody.innerHTML = filteredData.map(sv => `
+                <tr>
+                    <td>${sv.id}</td>
+                    <td>${sv.path}</td>
+                    <td class="actions">
+                        <button class="btn btn-danger btn-sm" onclick="deleteSnapshot('${sv.path}')">删除</button>
+                    </td>
+                </tr>
+            `).join('');
+        });
+}
+
+function showCreateModal() {
+    if (!currentMountPoint) {
+        alert('请先选择分区');
+        return;
+    }
+    const subvolSelect = document.getElementById('subvolSelect');
+    const selectedOption = subvolSelect.options[subvolSelect.selectedIndex];
+    const subvolPath = selectedOption ? selectedOption.value : '';
+    let label = 'snapshot';
+    if (subvolPath) {
+        const parts = subvolPath.split('/');
+        label = parts[parts.length - 1];
+    } else {
+        const select = document.getElementById('partitionSelect');
+        const option = select.options[select.selectedIndex];
+        label = option.text.split(' (')[0].trim();
+    }
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    document.getElementById('snapshotName').value = label + '-' + today;
+    document.getElementById('createModal').classList.add('show');
+}
+
+function closeModal() {
+    document.getElementById('createModal').classList.remove('show');
+}
+
+function createSubvolume() {
+    let name = document.getElementById('snapshotName').value.trim();
+    const readonly = document.getElementById('manualReadonly').checked;
+    
+    if (!name) {
+        const subvolSelect = document.getElementById('subvolSelect');
+        const subvolPath = subvolSelect.value;
+        let label = 'snapshot';
+        if (subvolPath) {
+            const parts = subvolPath.split('/');
+            label = parts[parts.length - 1];
+        } else {
+            const select = document.getElementById('partitionSelect');
+            const option = select.options[select.selectedIndex];
+            label = option.text.split(' (')[0].trim();
+        }
+        const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        name = label + '-' + today;
+    }
+    
+    const subvolSelect = document.getElementById('subvolSelect');
+    const sourceSubvol = subvolSelect.value;
+    const folderSelect = document.getElementById('folderSelect');
+    const folder = folderSelect.value;
+    
+    fetch('/api/snapshot', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mount_point: currentMountPoint,
+            source_subvol: sourceSubvol,
+            folder: folder,
+            name: name,
+            readonly: readonly
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert(data.message);
+        if (data.success) {
+            closeModal();
+            document.getElementById('snapshotName').value = '';
+            refreshSnapshots();
+        }
+    });
+}
+
+function deleteSnapshot(path) {
+    if (!confirm('确定要删除快照 ' + path + ' 吗?')) return;
+    
+    fetch('/api/snapshot', {
+        method: 'DELETE',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mount_point: currentMountPoint,
+            path: path
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert(data.message);
+        refreshSnapshots();
+    });
+}
+
+function onSchedulePartitionChange() {
+    const select = document.getElementById('schedulePartition');
+    const option = select.options[select.selectedIndex];
+    const mountPoint = option.dataset.mount || '';
+    
+    fetch('/api/subvolumes?mount_point=' + encodeURIComponent(mountPoint))
+        .then(r => r.json())
+        .then(data => {
+            const subvolSelect = document.getElementById('scheduleSubvol');
+            subvolSelect.innerHTML = '<option value="">根分区(无子卷)</option>';
+            data.forEach(sv => {
+                subvolSelect.innerHTML += '<option value="' + sv.path + '">' + sv.path + '</option>';
+            });
+            if (data.length > 0) {
+                subvolSelect.selectedIndex = 1;
+            }
+        });
+    
+    fetch('/api/folders?mount_point=' + encodeURIComponent(mountPoint) + '&filter_snapshots=include_only')
+        .then(r => r.json())
+        .then(data => {
+            const folderSelect = document.getElementById('scheduleFolder');
+            folderSelect.innerHTML = '';
+            data.forEach(folder => {
+                folderSelect.innerHTML += '<option value="' + folder + '">' + folder + '</option>';
+            });
+            if (data.length > 0) {
+                folderSelect.selectedIndex = 0;
+            }
+        });
+}
+
+function updateScheduleOptions() {
+    const type = document.getElementById('scheduleType').value;
+    document.getElementById('weeklyOptions').style.display = type === 'weekly' ? 'block' : 'none';
+    document.getElementById('monthlyOptions').style.display = type === 'monthly' ? 'block' : 'none';
+}
+
+function createSchedule() {
+    const name = document.getElementById('taskName').value.trim();
+    const select = document.getElementById('schedulePartition');
+    const option = select.options[select.selectedIndex];
+    const partition = select.value;
+    const mountPoint = option.dataset.mount || '';
+    const scheduleType = document.getElementById('scheduleType').value;
+    const hour = parseInt(document.getElementById('hour').value);
+    const minute = parseInt(document.getElementById('minute').value);
+    const second = parseInt(document.getElementById('second').value);
+    const readonly = document.getElementById('readonly').checked;
+    const maxKeep = parseInt(document.getElementById('maxKeep').value);
+    const updateLatest = document.getElementById('updateLatest').checked;
+    const sourceSubvol = document.getElementById('scheduleSubvol').value;
+    
+    if (!name || !partition) {
+        alert('请填写完整信息');
+        return;
+    }
+    
+    const data = {
+        name: name,
+        partition: partition,
+        mount_point: mountPoint,
+        source_subvol: sourceSubvol,
+        folder: document.getElementById('scheduleFolder').value,
+        schedule_type: scheduleType,
+        hour: hour,
+        minute: minute,
+        second: second,
+        readonly: readonly,
+        max_keep: maxKeep,
+        update_latest: updateLatest
+    };
+    
+    if (scheduleType === 'weekly') {
+        data.day_of_week = parseInt(document.getElementById('dayOfWeek').value);
+    } else if (scheduleType === 'monthly') {
+        data.day = parseInt(document.getElementById('dayOfMonth').value);
+    }
+    
+    fetch('/api/schedule', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert(data.success ? '任务创建成功' : '创建失败');
+        if (data.success) {
+            loadSchedules();
+        }
+    });
+}
+
+function loadSchedules() {
+    const select = document.getElementById('schedulePartition');
+    if (select.options.length > 0) {
+        onSchedulePartitionChange();
+    }
+    fetch('/api/partitions')
+        .then(r => r.json())
+        .then(partitions => {
+            const config = {{ config | tojson }};
+            const tasks = config.scheduled_tasks || [];
+            const tbody = document.querySelector('#scheduleTable tbody');
+            
+            if (tasks.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8">暂无定时任务</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = tasks.map(t => {
+                let freq = '';
+                if (t.schedule_type === 'daily') freq = '每天';
+                else if (t.schedule_type === 'weekly') freq = '每周' + ['日','一','二','三','四','五','六'][t.day_of_week];
+                else freq = '每月' + t.day + '日';
+                
+                const time = String(t.hour).padStart(2,'0') + ':' + 
+                            String(t.minute).padStart(2,'0') + ':' + 
+                            String(t.second || 0).padStart(2,'0');
+                
+                const label = partitions.find(p => p.device === t.partition);
+                const labelText = label ? label.label : t.partition;
+                
+                return `
+                <tr>
+                    <td>${t.name}</td>
+                    <td>${labelText}</td>
+                    <td>${freq}</td>
+                    <td>${time}</td>
+                    <td>${t.readonly ? '是' : '否'}</td>
+                    <td>${t.max_keep || '不限制'}</td>
+                    <td>${t.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-danger">禁用</span>'}</td>
+                    <td class="actions">
+                        <button class="btn btn-secondary btn-sm" onclick="runNow(${t.id})">执行</button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleSchedule(${t.id})">${t.enabled ? '禁用' : '启用'}</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteSchedule(${t.id})">删除</button>
+                    </td>
+                </tr>
+                `;
+            }).join('');
+        });
+}
+
+function runNow(taskId) {
+    fetch('/api/run_now/' + taskId)
+        .then(r => r.json())
+        .then(data => {
+            alert(data.success ? '执行成功' : '执行失败');
+            loadRecords();
+        });
+}
+
+function toggleSchedule(taskId) {
+    fetch('/api/schedule/' + taskId + '/toggle', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) loadSchedules();
+        });
+}
+
+function deleteSchedule(taskId) {
+    if (!confirm('确定要删除这个定时任务吗?')) return;
+    
+    fetch('/api/schedule/' + taskId, {method: 'DELETE'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) loadSchedules();
+        });
+}
+
+function handleDateRangeChange() {
+    const range = document.getElementById('dateRange').value;
+    document.getElementById('customDate').style.display = range === 'custom' ? 'inline-block' : 'none';
+    if (range !== 'custom') loadRecords();
+}
+
+function loadRecords() {
+    const recordType = document.getElementById('recordType').value;
+    const dateRange = document.getElementById('dateRange').value;
+    const customDate = document.getElementById('customDate').value;
+    
+    let url = '/api/records?type=' + recordType + '&date_range=' + dateRange;
+    if (dateRange === 'custom' && customDate) {
+        url += '&custom_date=' + customDate;
+    }
+    
+    fetch(url)
+        .then(r => r.json())
+        .then(records => {
+            const tbody = document.querySelector('#recordsTable tbody');
+            if (records.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7">暂无记录</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = records.map(r => {
+                const time = new Date(r.timestamp).toLocaleString('zh-CN');
+                const typeLabel = r.type === 'auto' ? '自动' : '手动';
+                return `
+                <tr>
+                    <td>${time}</td>
+                    <td>${typeLabel}</td>
+                    <td>${r.partition}</td>
+                    <td>${r.snapshot}</td>
+                    <td>${r.action}</td>
+                    <td>${r.success ? '<span class="text-success">成功</span>' : '<span class="text-danger">失败</span>'}</td>
+                    <td>${r.message}</td>
+                </tr>
+                `;
+            }).join('');
+        });
+}
+
+function saveSettings() {
+    const maxStorageMb = parseInt(document.getElementById('maxStorageMb').value);
+    
+    fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({max_storage_mb: maxStorageMb})
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert(data.success ? '设置已保存' : '保存失败');
+    });
+}
+
+loadSchedules();
+initPage();
+</script>
+</body>
+</html>

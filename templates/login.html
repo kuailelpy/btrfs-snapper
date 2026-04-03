@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if mode == 'create' %}创建账户{% else %}登录{% endif %} - Btrfs Snapper</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
+        h1 { text-align: center; color: #333; margin-bottom: 20px; font-size: 24px; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; font-weight: 500; color: #333; }
+        .form-group input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
+        .form-group input:focus { outline: none; border-color: #007bff; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .error { color: #dc3545; margin-bottom: 15px; text-align: center; }
+        .forgot-password { text-align: center; margin-top: 15px; }
+        .forgot-password a { color: #6c757d; font-size: 14px; cursor: pointer; text-decoration: none; }
+        .forgot-password a:hover { color: #007bff; }
+    </style>
+</head>
+<body>
+<div class="login-container">
+    <h1>{% if mode == 'create' %}创建账户{% else %}登录{% endif %}</h1>
+    <div id="error" class="error"></div>
+    <form id="loginForm">
+        <div class="form-group">
+            <label>用户名</label>
+            <input type="text" id="username" required>
+        </div>
+        <div class="form-group">
+            <label>密码</label>
+            <input type="password" id="password" required>
+        </div>
+        {% if mode == 'create' %}
+        <div class="form-group">
+            <label>确认密码</label>
+            <input type="password" id="confirmPassword" required>
+        </div>
+        {% endif %}
+        <button type="submit" class="btn btn-primary">{% if mode == 'create' %}创建账户{% else %}登录{% endif %}</button>
+    </form>
+    <div class="forgot-password">
+        <a onclick="showForgotPassword()">忘记密码？</a>
+    </div>
+</div>
+
+<script>
+document.getElementById('loginForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const confirmPassword = document.getElementById('confirmPassword') ? document.getElementById('confirmPassword').value : null;
+    
+    const mode = document.querySelector('h1').textContent;
+    
+    if (mode === '创建账户') {
+        if (password !== confirmPassword) {
+            document.getElementById('error').textContent = '两次密码输入不一致';
+            return;
+        }
+        if (!username || !password) {
+            document.getElementById('error').textContent = '请填写完整';
+            return;
+        }
+    }
+    
+    fetch('/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            window.location.href = '/';
+        } else {
+            document.getElementById('error').textContent = data.message;
+        }
+    })
+    .catch(function(err) {
+        document.getElementById('error').textContent = '请求失败: ' + err;
+    });
+});
+
+function showForgotPassword() {
+    alert('请到宿主机删除 /DATA/AppData/Btrfs-snapper/password 目录，重新打开WebUI，即可重建账户。');
+}
+</script>
+</body>
+</html>
