@@ -1,29 +1,27 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# 配置文件（包含用户隐私数据）
+config.json
 
-# Virtual environments
+# 日志文件
+logs/
+*.log
+
+# 执行记录
+records/
+
+# 密码文件
+password/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 虚拟环境
 venv/
-ENV/
 env/
+ENV/
 
 # IDE
 .vscode/
@@ -32,14 +30,6 @@ env/
 *.swo
 *~
 
-# Logs
-logs/*.log
-
-# Local config with sensitive data
-password/
-account
-attempts
-
-# OS
+# 系统文件
 .DS_Store
 Thumbs.db
