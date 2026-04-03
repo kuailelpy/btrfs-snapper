@@ -297,12 +297,21 @@ def execute_auto_task(task_id):
     add_record('auto', task['partition'], name, 'create', success, msg)
     
     if success and task.get('update_latest', True):
-        latest_link = os.path.join(mount_point, f"{task['name']}_latest")
-        target_path = os.path.join(mount_point, name)
+        latest_link = os.path.join(mount_point, folder, f"{task['name']}_latest") if folder else os.path.join(mount_point, f"{task['name']}_latest")
+        target_path = os.path.join(mount_point, folder, name) if folder else os.path.join(mount_point, name)
         if os.path.exists(target_path):
-            if os.path.islink(latest_link):
-                os.remove(latest_link)
-            os.symlink(target_path, latest_link)
+            try:
+                if os.path.exists(latest_link):
+                    if os.path.islink(latest_link):
+                        os.unlink(latest_link)
+                    else:
+                        if os.path.isdir(latest_link):
+                            shutil.rmtree(latest_link)
+                        else:
+                            os.remove(latest_link)
+                os.symlink(target_path, latest_link)
+            except Exception as e:
+                add_record('auto', task['partition'], name, 'create_latest_link', False, f"创建latest链接失败: {str(e)}")
     
     max_keep = task.get('max_keep')
     if max_keep and max_keep > 0:
@@ -314,10 +323,13 @@ def cleanup_old_snapshots(mount_point, max_keep):
     
     for sv in snapshots:
         path = sv['path']
+        # 取路径最后一级作为文件名
+        filename = os.path.basename(path)
         for task in load_config().get('scheduled_tasks', []):
             if task['mount_point'] == mount_point:
                 prefix = task['name']
-                if path.startswith(prefix):
+                # 判断文件名是否以"任务名_"开头，确保匹配正确
+                if filename.startswith(f"{prefix}_"):
                     if prefix not in snap_prefixes:
                         snap_prefixes[prefix] = []
                     snap_prefixes[prefix].append({'path': path, 'id': sv['id']})
