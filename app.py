@@ -127,24 +127,66 @@ def save_config(config):
 def get_btrfs_partitions():
     result = subprocess.run(['blkid', '-t', 'TYPE=btrfs', '-o', 'device'], capture_output=True, text=True)
     partitions = []
-    mount_map = {}
+    btrfs_mounts = []
     
-    mount_result = subprocess.run(['mount', '-t', 'btrfs'], capture_output=True, text=True)
+    # 使用findmnt读取挂载信息，支持带空格的路径
+    mount_result = subprocess.run(
+        ['findmnt', '-t', 'btrfs', '-no', 'SOURCE,TARGET,OPTIONS'],
+        capture_output=True, text=True
+    )
     if mount_result.returncode == 0 and mount_result.stdout.strip():
         for line in mount_result.stdout.strip().split('\n'):
+            # 去掉findmnt的树状符号
+            line = line.replace('└─', '').replace('├─', '').strip()
+            # SOURCE字段可能包含[子卷路径]，需要处理
+            if '[' in line:
+                dev_part = line[:line.index('[')].strip()
+            else:
+                dev_part = line.split()[0]
+            # 提取TARGET挂载点：SOURCE后面的部分，到OPTIONS（包含subvol=）之前
             parts = line.split()
-            if len(parts) >= 3:
-                dev = parts[0]
-                mount_point = parts[2]
-                mount_map[dev] = mount_point
+            target = ''
+            subvol = '/'
+            for i in range(1, len(parts)):
+                if 'subvol=' in parts[i]:
+                    # 找到subvol参数
+                    for opt in parts[i].split(','):
+                        if opt.startswith('subvol='):
+                            subvol = opt.split('=', 1)[1]
+                            break
+                    break
+                else:
+                    # 拼接带空格的挂载路径
+                    if target:
+                        target += ' ' + parts[i]
+                    else:
+                        target = parts[i]
+            if target:
+                btrfs_mounts.append({'dev': dev_part, 'mount_point': target, 'subvol': subvol})
     
     if result.returncode == 0 and result.stdout.strip():
         for dev in result.stdout.strip().split('\n'):
             if dev:
                 label_result = subprocess.run(['blkid', '-s', 'LABEL', '-o', 'value', dev], capture_output=True, text=True)
-                label = label_result.stdout.strip() or dev
-                mount_point = mount_map.get(dev, '')
-                partitions.append({'device': dev, 'label': label, 'mount_point': mount_point})
+                base_label = label_result.stdout.strip() or dev
+                # 同一个分区的多个挂载点都单独返回
+                dev_mounts = [m for m in btrfs_mounts if m['dev'] == dev]
+                if dev_mounts:
+                    for m in dev_mounts:
+                        subvol = m['subvol']
+                        if subvol == '/':
+                            label = f"{base_label} (根卷)"
+                        else:
+                            label = f"{base_label} (子卷: {subvol})"
+                        partitions.append({
+                            'device': dev, 
+                            'label': label, 
+                            'mount_point': m['mount_point'],
+                            'subvol': subvol
+                        })
+                else:
+                    # 没有挂载的分区
+                    partitions.append({'device': dev, 'label': base_label, 'mount_point': '', 'subvol': ''})
     return partitions
 
 def get_subvolumes(mount_point):
@@ -178,17 +220,18 @@ def get_folders(mount_point, filter_snapshots='exclude'):
                     subvol_paths.add(parts[8])
     
     for item in os.listdir(mount_point):
-        if item not in subvol_paths:
-            full_path = os.path.join(mount_point, item)
-            if os.path.isdir(full_path) and not os.path.islink(full_path):
-                if filter_snapshots == 'exclude':
-                    if 'snapshots' not in item:
-                        folders.append(item)
-                elif filter_snapshots == 'include_only':
-                    if 'snapshots' in item:
-                        folders.append(item)
-                else: # all
+        full_path = os.path.join(mount_point, item)
+        if os.path.isdir(full_path) and not os.path.islink(full_path):
+            if item in subvol_paths:
+                continue
+            if filter_snapshots == 'exclude':
+                if 'snapshots' not in item:
                     folders.append(item)
+            elif filter_snapshots == 'include_only':
+                if 'snapshots' in item:
+                    folders.append(item)
+            else:
+                folders.append(item)
     folders.sort()
     return folders
 

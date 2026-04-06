@@ -50,7 +50,7 @@
                     <label>选择分区:</label>
                     <select id="partitionSelect" onchange="onPartitionChange()">
                         {% for p in partitions %}
-                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}" {% if default_partition and p.device == default_partition.device %}selected{% endif %}>{{ p.label }} ({{ p.device }})</option>
+                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}" {% if default_partition and p.device == default_partition.device %}selected{% endif %}>{{ p.label }} ({{ p.device }}) {{ p.mount_point }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -122,7 +122,7 @@
                     <label>选择分区:</label>
                     <select id="schedulePartition" onchange="onSchedulePartitionChange()">
                         {% for p in partitions %}
-                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}">{{ p.label }} ({{ p.device }})</option>
+                        <option value="{{ p.device }}" data-mount="{{ p.mount_point }}">{{ p.label }} ({{ p.device }}) {{ p.mount_point }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -607,7 +607,7 @@ function loadSchedules() {
                             String(t.second || 0).padStart(2,'0');
                 
                 const label = partitions.find(p => p.device === t.partition);
-                const labelText = label ? label.label : t.partition;
+                const labelText = label ? `${label.label} (${label.device}) ${label.mount_point}` : t.partition;
                 
                 return `
                 <tr>
