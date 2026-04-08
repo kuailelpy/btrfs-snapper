@@ -344,7 +344,7 @@ def execute_auto_task(task_id):
         target_path = os.path.join(mount_point, folder, name) if folder else os.path.join(mount_point, name)
         if os.path.exists(target_path):
             try:
-                if os.path.exists(latest_link):
+                if os.path.lexists(latest_link):
                     if os.path.islink(latest_link):
                         os.unlink(latest_link)
                     else:

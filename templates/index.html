@@ -191,16 +191,17 @@
                     <thead>
                         <tr>
                             <th>任务名</th>
-                            <th>分区</th>
+                            <th>子卷</th>
                             <th>频率</th>
                             <th>时间</th>
                             <th>只读</th>
+                            <th>更新符号链接</th>
                             <th>保留数</th>
                             <th>状态</th>
                             <th>操作</th>
                         </tr>
                     </thead>
-                    <tbody><tr><td colspan="8">暂无定时任务</td></tr></tbody>
+                    <tbody><tr><td colspan="9">暂无定时任务</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -606,16 +607,16 @@ function loadSchedules() {
                             String(t.minute).padStart(2,'0') + ':' + 
                             String(t.second || 0).padStart(2,'0');
                 
-                const label = partitions.find(p => p.device === t.partition);
-                const labelText = label ? `${label.label} (${label.device}) ${label.mount_point}` : t.partition;
+                const subvolText = t.source_subvol ? t.source_subvol : '根分区(无子卷)';
                 
                 return `
                 <tr>
                     <td>${t.name}</td>
-                    <td>${labelText}</td>
+                    <td>${subvolText}</td>
                     <td>${freq}</td>
                     <td>${time}</td>
                     <td>${t.readonly ? '是' : '否'}</td>
+                    <td>${t.update_latest ? '是' : '否'}</td>
                     <td>${t.max_keep || '不限制'}</td>
                     <td>${t.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-danger">禁用</span>'}</td>
                     <td class="actions">
